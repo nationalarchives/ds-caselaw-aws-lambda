@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import tarfile
 import xml.etree.ElementTree as ET
@@ -22,6 +23,10 @@ TDR_TARBALL_PATH = os.path.join(
     "../aws_examples/s3/te-editorial-out-int/TDR-2022-DNWR.tar.gz",
 )
 
+v1_message_raw = """{"consignment-reference": "DXW-2001-DRGN",
+                      "number-of-retries": 1,
+                      "consignment-type": "judgment",
+                      "s3-folder-url": "DXW-2001-DRGN"}"""
 
 v2_message_raw = """
     {
@@ -58,8 +63,18 @@ class TestHandler:
     @patch("lambda_function.tarfile")
     @patch("lambda_function.boto3.session.Session")
     @patch("lambda_function.urllib3.PoolManager")
+    @patch("lambda_function.extract_uri", return_value="source/uri")
+    @patch("lambda_function.select_uri", return_value="target/uri")
     def test_handler_messages_v1(
-        self, urllib_pool, boto_session, tarfile, metadata, apiclient, capsys
+        self,
+        select,
+        extract,
+        urllib_pool,
+        boto_session,
+        tarfile,
+        metadata,
+        apiclient,
+        capsys,
     ):
         """Mostly intended as a very sketchy test of the primary function"""
         urllib_pool.return_value.request.return_value.status = 200
@@ -68,19 +83,16 @@ class TestHandler:
             b"3"
         )
 
-        message = """{"consignment-reference": "DXW-2001-DRGN",
-                      "number-of-retries": 1,
-                      "consignment-type": "judgment",
-                      "s3-folder-url": "DXW-2001-DRGN"}"""
+        message = v1_message_raw
         event = {"Records": [{"Sns": {"Message": message}}]}
         lambda_function.handler(event=event, context=None)
 
         log = capsys.readouterr().out
         assert "Ingester Start: Consignment reference DXW-2001-DRGN" in log
         assert "v1: True" in log
-        assert "Ingesting document" in log
-        assert "Updated judgment xml" in log
-        assert "Upload Successful" in log
+        assert "Ingesting document source/uri at target/uri" in log
+        assert "Inserted judgment xml for source/uri at target/uri" in log
+        assert "Upload Successful target/uri/target_uri.docx" in log
         assert "Ingestion complete" in log
 
     @patch("lambda_function.api_client")
@@ -88,8 +100,18 @@ class TestHandler:
     @patch("lambda_function.tarfile")
     @patch("lambda_function.boto3.session.Session")
     @patch("lambda_function.urllib3.PoolManager")
+    @patch("lambda_function.extract_uri", return_value="source/uri")
+    @patch("lambda_function.select_uri", return_value="target/uri")
     def test_handler_messages_v2(
-        self, urllib_pool, boto_session, tarfile, metadata, apiclient, capsys
+        self,
+        select,
+        extact,
+        urllib_pool,
+        boto_session,
+        tarfile,
+        metadata,
+        apiclient,
+        capsys,
     ):
         """Mostly intended as a very sketchy test of the primary function"""
         urllib_pool.return_value.request.return_value.status = 200
@@ -131,9 +153,9 @@ class TestHandler:
         assert "Ingester Start: Consignment reference FCL-12345" in log
         assert "v1: False" in log
         assert "tar.gz saved locally as /tmp/FCL-12345.tar.gz" in log
-        assert "Ingesting document" in log
-        assert "Updated judgment xml" in log
-        assert "Upload Successful" in log
+        assert "Ingesting document source/uri at target/uri" in log
+        assert "Inserted judgment xml for source/uri at target/uri" in log
+        assert "Upload Successful target/uri/target_uri.docx" in log
         assert "Ingestion complete" in log
 
 
@@ -374,47 +396,6 @@ class TestLambda:
         NotificationsAPIClient.send_email_notification.assert_not_called
         mock_print.assert_not_called
 
-    @patch.dict(
-        os.environ,
-        {
-            "NOTIFY_API_KEY": "ingester-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-            "EDITORIAL_UI_BASE_URL": "http://editor.url/",
-            "NOTIFY_EDITORIAL_ADDRESS": "test@notifications.service.gov.uk",
-            "NOTIFY_UPDATED_JUDGMENT_TEMPLATE_ID": "template-id",
-            "ROLLBAR_ENV": "prod",
-        },
-        clear=True,
-    )
-    @patch("builtins.print")
-    def test_send_updated_judgment_notification(self, mock_print):
-        metadata = {
-            "parameters": {
-                "TDR": {
-                    "Source-Organization": "Ministry of Justice",
-                    "Contact-Name": "Tom King",
-                    "Internal-Sender-Identifier": "TDR-2021-CF6L",
-                    "Consignment-Completed-Datetime": "2021-12-16T14:54:06Z",
-                    "Contact-Email": "someone@example.com",
-                }
-            }
-        }
-        expected_personalisation = {
-            "url": "http://editor.url/detail?judgment_uri=uri",
-            "consignment": "TDR-2021-CF6L",
-            "submitter": "Tom King, Ministry of Justice <someone@example.com>",
-            "submitted_at": "2021-12-16T14:54:06Z",
-        }
-        NotificationsAPIClient.send_email_notification = MagicMock()
-        lambda_function.send_updated_judgment_notification("uri", metadata)
-        NotificationsAPIClient.send_email_notification.assert_called_with(
-            email_address="test@notifications.service.gov.uk",
-            template_id="template-id",
-            personalisation=expected_personalisation,
-        )
-        mock_print.assert_called_with(
-            Contains("Sent notification to test@notifications.service.gov.uk")
-        )
-
     @patch.object(lambda_function, "store_file")
     def test_copy_file_success(self, mock_store_file):
         tar = tarfile.open(
@@ -503,32 +484,6 @@ class TestLambda:
         tar.extractfile = MagicMock(side_effect=KeyError)
         result = lambda_function.create_parser_log_xml(tar)
         assert result == "<error>parser.log not found</error>"
-
-    @patch.dict(
-        os.environ,
-        {"PUBLIC_ASSET_BUCKET": "public-bucket", "AWS_BUCKET_NAME": "private-bucket"},
-    )
-    def test_update_published_documents(self):
-        contents = {"Contents": [{"Key": "file1.ext"}, {"Key": "file2.ext"}]}
-        s3_client = boto3.Session
-        s3_client.list_objects = MagicMock(return_value=contents)
-        s3_client.copy = MagicMock()
-        calls = [
-            call(
-                {"Bucket": "private-bucket", "Key": "file1.ext"},
-                "public-bucket",
-                "file1.ext",
-                {"ACL": "public-read"},
-            ),
-            call(
-                {"Bucket": "private-bucket", "Key": "file2.ext"},
-                "public-bucket",
-                "file2.ext",
-                {"ACL": "public-read"},
-            ),
-        ]
-        lambda_function.update_published_documents("uri", s3_client)
-        s3_client.copy.assert_has_calls(calls)
 
     def test_get_consignment_reference_success_v1(self):
         message = {
@@ -720,3 +675,18 @@ class TestLambda:
         api_client.set_published = MagicMock()
         lambda_function.unpublish_updated_judgment(uri)
         api_client.set_published.assert_called_with(uri, False)
+
+    @patch("lambda_function.api_client")
+    def test_change_uri_if_taken(self, mock_api):
+        mock_api.judgment_exists.return_value = True
+        collision_1 = lambda_function.select_uri("")
+        collision_2 = lambda_function.select_uri("")
+        # it looks the right shape
+        assert re.search(r"collisions/.*T.*/[\dabcdef-]+", collision_1)
+        # it has a different ending
+        assert collision_1.split("/")[-1] != collision_2.split("/")[-1]
+
+    @patch("lambda_function.api_client")
+    def test_dont_change_uri_if_free(self, mock_api):
+        mock_api.judgment_exists.return_value = False
+        assert lambda_function.select_uri("teststring") == "teststring"

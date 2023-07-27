@@ -29,7 +29,7 @@ First, copy `.env.example` to `.env` and fill in the missing variables. If you a
 Then, start Localstack using:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This will start Localstack in detached mode; logs are accessible via Docker Desktop.
