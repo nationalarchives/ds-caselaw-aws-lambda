@@ -16,6 +16,8 @@ from caselawclient.Client import (
     MarklogicCommunicationError,
     MarklogicResourceNotFoundError,
 )
+from caselawclient.models.identifiers.neutral_citation import NeutralCitationNumber
+from caselawclient.models.identifiers.press_summary_ncn import PressSummaryRelatedNCNIdentifier
 from notifications_python_client.notifications import NotificationsAPIClient
 
 rollbar.init(access_token=None, enabled=False)
@@ -223,6 +225,7 @@ class TestHandler:
         )
         assert annotation.call_count == 2
         assert doc.identifiers.add.call_args_list[0].args[0].value == "[2012] UKUT 82 (IAC)"
+        assert type(doc.identifiers.add.call_args_list[0].args[0]) is NeutralCitationNumber
         doc.save_identifiers.assert_called()
 
 
@@ -814,4 +817,32 @@ class TestEmailLogic:
 
         updated.assert_not_called()
         new.assert_not_called()
-        bulk.assert_called()
+
+
+@patch("lambda_function.api_client", autospec=True)
+class TestDocIdentifiers:
+    def test_select_type_press_summary(self, api_client):
+        ingest = MagicMock()
+        ingest.uri = "jam/press-summary/1"
+
+        doc = MagicMock()
+        doc.identifiers = MagicMock()
+        doc.neutral_citation = "[2013] UKSC 1"
+        api_client.get_document_by_uri.return_value = doc
+
+        lambda_function.Ingest.set_document_identifiers(ingest)
+        assert type(doc.identifiers.add.call_args_list[0].args[0]) is PressSummaryRelatedNCNIdentifier
+        doc.save_identifiers.assert_called()
+
+    def test_select_type_judgment(self, api_client):
+        ingest = MagicMock()
+        ingest.uri = "jam/not-a-summary/1"
+
+        doc = MagicMock()
+        doc.identifiers = MagicMock()
+        doc.neutral_citation = "[2013] UKSC 1"
+        api_client.get_document_by_uri.return_value = doc
+
+        lambda_function.Ingest.set_document_identifiers(ingest)
+        assert type(doc.identifiers.add.call_args_list[0].args[0]) is NeutralCitationNumber
+        doc.save_identifiers.assert_called()
