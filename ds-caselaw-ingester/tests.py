@@ -16,6 +16,7 @@ from caselawclient.Client import (
     MarklogicCommunicationError,
     MarklogicResourceNotFoundError,
 )
+from caselawclient.factories import JudgmentFactory, PressSummaryFactory
 from caselawclient.models.identifiers.neutral_citation import NeutralCitationNumber
 from caselawclient.models.identifiers.press_summary_ncn import PressSummaryRelatedNCNIdentifier
 from notifications_python_client.notifications import NotificationsAPIClient
@@ -823,10 +824,11 @@ class TestEmailLogic:
 class TestDocIdentifiers:
     def test_select_type_press_summary(self, api_client):
         ingest = MagicMock()
-        ingest.uri = "jam/press-summary/1"
+        ingest.uri = "jam/1/ps/1"
 
-        doc = MagicMock()
+        doc = PressSummaryFactory.build()
         doc.identifiers = MagicMock()
+        doc.save_identifiers = MagicMock()
         doc.neutral_citation = "[2013] UKSC 1"
         api_client.get_document_by_uri.return_value = doc
 
@@ -836,10 +838,11 @@ class TestDocIdentifiers:
 
     def test_select_type_judgment(self, api_client):
         ingest = MagicMock()
-        ingest.uri = "jam/not-a-summary/1"
+        ingest.uri = "jam/1"
 
-        doc = MagicMock()
+        doc = JudgmentFactory.build()
         doc.identifiers = MagicMock()
+        doc.save_identifiers = MagicMock()
         doc.neutral_citation = "[2013] UKSC 1"
         api_client.get_document_by_uri.return_value = doc
 
