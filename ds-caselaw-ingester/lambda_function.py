@@ -21,6 +21,7 @@ from caselawclient.client_helpers import VersionAnnotation, VersionType
 from caselawclient.models.documents import DocumentURIString
 from caselawclient.models.identifiers.neutral_citation import NeutralCitationNumber
 from caselawclient.models.identifiers.press_summary_ncn import PressSummaryRelatedNCNIdentifier
+from caselawclient.models.press_summaries import PressSummary
 from dotenv import load_dotenv
 from mypy_boto3_s3.client import S3Client
 from notifications_python_client.notifications import NotificationsAPIClient
@@ -449,7 +450,7 @@ class Ingest:
             logger.warning(msg)
 
         ncn = doc.neutral_citation
-        identifier_class = PressSummaryRelatedNCNIdentifier if "/press-summary" in self.uri else NeutralCitationNumber
+        identifier_class = PressSummaryRelatedNCNIdentifier if isinstance(doc, PressSummary) else NeutralCitationNumber
 
         if ncn:
             doc.identifiers.add(identifier_class(ncn))
