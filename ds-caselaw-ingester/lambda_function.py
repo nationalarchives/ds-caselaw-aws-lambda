@@ -20,6 +20,8 @@ from caselawclient.Client import (
 from caselawclient.client_helpers import VersionAnnotation, VersionType
 from caselawclient.models.documents import DocumentURIString
 from caselawclient.models.identifiers.neutral_citation import NeutralCitationNumber
+from caselawclient.models.identifiers.press_summary_ncn import PressSummaryRelatedNCNIdentifier
+from caselawclient.models.press_summaries import PressSummary
 from dotenv import load_dotenv
 from mypy_boto3_s3.client import S3Client
 from notifications_python_client.notifications import NotificationsAPIClient
@@ -447,15 +449,13 @@ class Ingest:
             msg = f"Ingesting, but identifiers already present for {self.uri}!"
             logger.warning(msg)
 
-        try:
-            ncn = doc.neutral_citation
-        except AttributeError:
-            ncn = None
+        ncn = doc.neutral_citation
+        identifier_class = PressSummaryRelatedNCNIdentifier if isinstance(doc, PressSummary) else NeutralCitationNumber
 
         if ncn:
-            doc.identifiers.add(NeutralCitationNumber(ncn))
+            doc.identifiers.add(identifier_class(ncn))
             doc.save_identifiers()
-            logger.info(f"Ingested document had NCN {ncn}")
+            logger.info(f"Ingested document had identifier {identifier_class.__name__} {ncn}")
         else:
             logger.info("Ingested document had NCN (NOT FOUND)")
 
