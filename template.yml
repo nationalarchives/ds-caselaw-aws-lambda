@@ -72,7 +72,7 @@ Resources:
     Properties:
       CodeUri: ds-caselaw-ingester/
       Handler: lambda_function.handler
-      Runtime: python3.11
+      Runtime: python2
       Architectures:
         - x86_64
       Timeout: 420
