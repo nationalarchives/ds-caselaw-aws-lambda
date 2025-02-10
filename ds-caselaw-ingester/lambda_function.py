@@ -22,6 +22,7 @@ from caselawclient.models.documents import DocumentURIString
 from caselawclient.models.identifiers.neutral_citation import NeutralCitationNumber
 from caselawclient.models.identifiers.press_summary_ncn import PressSummaryRelatedNCNIdentifier
 from caselawclient.models.press_summaries import PressSummary
+from caselawclient.models.utilities.aws import S3PrefixString
 from dotenv import load_dotenv
 from mypy_boto3_s3.client import S3Client
 from notifications_python_client.notifications import NotificationsAPIClient
@@ -263,8 +264,9 @@ def extract_lambda_versions(versions: list[dict[str, str]]) -> list[tuple[str, s
     return version_tuples
 
 
-def store_file(file, folder, filename, s3_client: S3Client):
-    pathname = f"{folder}/{filename}"
+def store_file(file, destination_folder: S3PrefixString, destination_filename: str, s3_client: S3Client):
+    """Given a file, store it in the specified location in S3."""
+    pathname: str = destination_folder + destination_filename
     try:
         s3_client.upload_fileobj(file, AWS_BUCKET_NAME, pathname)
         print(f"Upload Successful {pathname}")
@@ -290,10 +292,22 @@ def personalise_email(uri: str, metadata: dict) -> dict:
     }
 
 
-def copy_file(tarfile, input_filename, output_filename, uri, s3_client: S3Client):
+def copy_file(
+    tarfile,
+    input_filename: str,
+    output_filename: str,
+    output_location: S3PrefixString,
+    s3_client: S3Client,
+) -> None:
+    """Copy the specified file from the input tar to the destination location."""
     try:
         file = tarfile.extractfile(input_filename)
-        store_file(file, uri, output_filename, s3_client)
+        store_file(
+            file=file,
+            destination_folder=output_location,
+            destination_filename=output_filename,
+            s3_client=s3_client,
+        )
     except KeyError as err:
         raise FileNotFoundException(f"File was not found: {input_filename}, files were {tarfile.getnames()} ") from err
 
@@ -532,10 +546,10 @@ class Ingest:
         )
         with open(self.local_tar_filename, mode="rb") as local_tar:
             store_file(
-                local_tar,
-                self.uri,
-                os.path.basename(modified_targz_filename),
-                s3_client,
+                file=local_tar,
+                destination_folder=S3PrefixString(self.uri + "/"),
+                destination_filename=os.path.basename(modified_targz_filename),
+                s3_client=s3_client,
             )
         print(f"saved tar.gz as {modified_targz_filename!r}")
 
@@ -547,7 +561,7 @@ class Ingest:
                     tar,
                     f"{self.consignment_reference}/{docx_filename}",
                     f"{self.uri.replace('/', '_')}.docx",
-                    self.uri,
+                    S3PrefixString(self.uri + "/"),
                     s3_client,
                 )
 
@@ -557,7 +571,7 @@ class Ingest:
                 tar,
                 f"{self.consignment_reference}/parser.log",
                 "parser.log",
-                self.uri,
+                S3PrefixString(self.uri + "/"),
                 s3_client,
             )
 
@@ -570,7 +584,7 @@ class Ingest:
                         tar,
                         f"{self.consignment_reference}/{image_filename}",
                         image_filename,
-                        self.uri,
+                        S3PrefixString(self.uri + "/"),
                         s3_client,
                     )
 
