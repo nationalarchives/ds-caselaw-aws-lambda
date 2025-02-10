@@ -48,7 +48,7 @@ api_client = MarklogicApiClient(
 
 
 class Metadata:
-    def __init__(self, metadata):
+    def __init__(self, metadata) -> None:
         self.metadata = metadata
         self.parameters = metadata.get("parameters", {})
 
@@ -57,7 +57,7 @@ class Metadata:
         return "TDR" in self.parameters
 
     @property
-    def force_publish(self):
+    def force_publish(self) -> bool:
         return self.parameters.get("INGESTER_OPTIONS", {}).get("auto_publish", False)
 
 
@@ -70,7 +70,7 @@ class Message:
         return cls.from_message(message)
 
     @classmethod
-    def from_message(cls, message: dict):
+    def from_message(cls, message: dict) -> V2Message | S3Message:
         if message.get("Records", [{}])[0].get("eventSource") == "aws:s3":
             return S3Message(message["Records"][0])
         elif "parameters" in message:
@@ -78,11 +78,11 @@ class Message:
         else:
             raise InvalidMessageException(f"Did not recognise message type. {message}")
 
-    def __init__(self, message):
+    def __init__(self, message) -> None:
         self.message = message
 
     @property
-    def originator(self):
+    def originator(self) -> None:
         # potential values are:
         # Original message from TDR: 'TDR'
         # Reparse message from FCL: 'FCL'
@@ -93,19 +93,19 @@ class Message:
         """In most cases we trust we already have the correct consignment reference"""
         return
 
-    def get_consignment_reference(*args, **kwargs):
+    def get_consignment_reference(*args, **kwargs) -> str:
         raise NotImplementedError("defer to subclasses")
 
 
 class V2Message(Message):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     @property
     def originator(self) -> str:
         return self.message.get("parameters", {}).get("originator")
 
-    def get_consignment_reference(self):
+    def get_consignment_reference(self) -> str:
         """A strange quirk: the consignment reference we recieve from the V2 message is
         of the form TDR-2000-123, but the consignment reference inside the document is
         of the form TRE-TDR-2000-123. The folder in the .tar.gz file is TDR-2000-123,
@@ -131,12 +131,12 @@ class V2Message(Message):
 class S3Message(V2Message):
     """An SNS message generated directly by adding a file to an S3 bucket"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         self._consignment = None
         super().__init__(*args, **kwargs)
 
     @property
-    def originator(self):
+    def originator(self) -> str:
         return "FCL S3"
 
     def get_consignment_reference(self):
@@ -387,7 +387,7 @@ class Ingest:
     def from_message_dict(cls, message_dict: dict):
         return Ingest(Message.from_message(message_dict))
 
-    def __init__(self, message: Message):
+    def __init__(self, message: Message) -> None:
         self.message = message
         self.consignment_reference = self.message.get_consignment_reference()
         print(f"Ingester Start: Consignment reference {self.consignment_reference}")
@@ -653,6 +653,6 @@ def process_message(message):
 
 
 @rollbar.lambda_function
-def handler(event, context):
+def handler(event, context) -> None:
     for message in all_messages(event):
         process_message(message)
