@@ -35,7 +35,7 @@ repos:
           - types-python-dateutil
           - types-pytz
           - boto3-stubs[s3,sns]
-          - ds-caselaw-marklogic-api-client~=29.0.0
+          - ds-caselaw-marklogic-api-client~=31.1.0
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
