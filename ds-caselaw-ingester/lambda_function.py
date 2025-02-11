@@ -303,7 +303,7 @@ def personalise_email(uri: str, metadata: TREMetadataDict) -> dict:
 
 
 def copy_file(
-    tarfile,
+    tarfile: tarfile.TarFile,
     input_filename: str,
     output_filename: str,
     output_location: S3PrefixString,
@@ -322,12 +322,15 @@ def copy_file(
         raise FileNotFoundException(f"File was not found: {input_filename}, files were {tarfile.getnames()} ") from err
 
 
-def create_parser_log_xml(tar) -> str:
+def create_parser_log_xml(tar: tarfile.TarFile) -> str:
     parser_log_value = "<error>parser.log not found</error>"
     for member in tar.getmembers():
         if "parser.log" in member.name:
             parser_log = tar.extractfile(member)
-            parser_log_contents = escape(parser_log.read().decode("utf-8"))
+            if parser_log is not None:
+                parser_log_contents = escape(parser_log.read().decode("utf-8"))
+            else:
+                parser_log_contents = "Unable to read parser log file!"
             parser_log_value = f"<error>{parser_log_contents}</error>"
     return parser_log_value
 
