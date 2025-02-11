@@ -4,6 +4,7 @@ import os
 import tarfile
 import xml.etree.ElementTree as ET
 from contextlib import suppress
+from typing import Any, TypedDict
 from urllib.parse import unquote_plus
 from uuid import uuid4
 from xml.sax.saxutils import escape
@@ -25,6 +26,7 @@ from caselawclient.models.press_summaries import PressSummary
 from caselawclient.models.utilities.aws import S3PrefixString
 from dotenv import load_dotenv
 from mypy_boto3_s3.client import S3Client
+from mypy_boto3_s3.type_defs import CopySourceTypeDef
 from notifications_python_client.notifications import NotificationsAPIClient
 
 logger = logging.getLogger("ingester")
@@ -50,9 +52,24 @@ api_client = MarklogicApiClient(
 )
 
 
+class TREMetadataDict(TypedDict):
+    parameters: dict[str, Any]
+
+
+class SubmitterInformationDict(TypedDict):
+    name: str
+    email: str
+
+
+class VersionPayloadDict(TypedDict, total=False):
+    tre_raw_metadata: TREMetadataDict
+    tdr_reference: str
+    submitter: SubmitterInformationDict
+
+
 class Metadata:
     def __init__(self, metadata):
-        self.metadata = metadata
+        self.metadata: TREMetadataDict = metadata
         self.parameters = metadata.get("parameters", {})
 
     @property
@@ -60,7 +77,7 @@ class Metadata:
         return "TDR" in self.parameters
 
     @property
-    def force_publish(self):
+    def force_publish(self) -> bool:
         return self.parameters.get("INGESTER_OPTIONS", {}).get("auto_publish", False)
 
 
@@ -230,7 +247,7 @@ def extract_xml_file(tar: tarfile.TarFile, xml_file_name: str):
     return xml_file
 
 
-def extract_metadata(tar: tarfile.TarFile, consignment_reference: str):
+def extract_metadata(tar: tarfile.TarFile, consignment_reference: str) -> TREMetadataDict:
     te_metadata_file = None
     decoder = json.decoder.JSONDecoder()
     for member in tar.getmembers():
@@ -247,7 +264,7 @@ def get_consignment_reference(message):
     return Message.from_message(message).get_consignment_reference()
 
 
-def extract_docx_filename(metadata: dict, consignment_reference: str) -> str:
+def extract_docx_filename(metadata: TREMetadataDict, consignment_reference: str) -> str:
     try:
         return metadata["parameters"]["TRE"]["payload"]["filename"]
     except KeyError as err:
@@ -276,7 +293,7 @@ def store_file(file, destination_folder: S3PrefixString, destination_filename: s
         print("Credentials not available")
 
 
-def personalise_email(uri: str, metadata: dict) -> dict:
+def personalise_email(uri: str, metadata: TREMetadataDict) -> dict:
     """Doesn't contain 'doctype', re-add for new judgment notification"""
     try:
         tdr_metadata = metadata["parameters"]["TDR"]
@@ -312,7 +329,7 @@ def copy_file(
         raise FileNotFoundException(f"File was not found: {input_filename}, files were {tarfile.getnames()} ") from err
 
 
-def create_parser_log_xml(tar):
+def create_parser_log_xml(tar) -> str:
     parser_log_value = "<error>parser.log not found</error>"
     for member in tar.getmembers():
         if "parser.log" in member.name:
@@ -322,9 +339,9 @@ def create_parser_log_xml(tar):
     return parser_log_value
 
 
-def update_published_documents(uri, s3_client):
-    public_bucket = os.getenv("PUBLIC_ASSET_BUCKET")
-    private_bucket = os.getenv("AWS_BUCKET_NAME")
+def update_published_documents(uri, s3_client: S3Client) -> None:
+    public_bucket = os.environ["PUBLIC_ASSET_BUCKET"]
+    private_bucket = os.environ["AWS_BUCKET_NAME"]
 
     response = s3_client.list_objects(Bucket=private_bucket, Prefix=uri)
 
@@ -332,20 +349,20 @@ def update_published_documents(uri, s3_client):
         key = result["Key"]
 
         if "parser.log" not in key and not str(key).endswith(".tar.gz"):
-            source = {"Bucket": private_bucket, "Key": key}
-            extra_args = {}
+            source: CopySourceTypeDef = {"Bucket": private_bucket, "Key": key}
+            extra_args: dict[str, Any] = {}
             s3_client.copy(source, public_bucket, key, extra_args)
 
 
-def parse_xml(xml) -> ET.Element:
+def parse_xml(xml: str) -> ET.Element:
     ET.register_namespace("", "http://docs.oasis-open.org/legaldocml/ns/akn/3.0")
     ET.register_namespace("uk", "https://caselaw.nationalarchives.gov.uk/akn")
     return ET.XML(xml)
 
 
-def _build_version_annotation_payload_from_metadata(metadata: dict):
+def _build_version_annotation_payload_from_metadata(metadata: TREMetadataDict) -> VersionPayloadDict:
     """Turns metadata from TRE into a structured annotation payload."""
-    payload = {
+    payload: VersionPayloadDict = {
         "tre_raw_metadata": metadata,
     }
 
@@ -359,7 +376,7 @@ def _build_version_annotation_payload_from_metadata(metadata: dict):
     return payload
 
 
-def get_best_xml(uri, tar, xml_file_name, consignment_reference):
+def get_best_xml(uri, tar, xml_file_name: str, consignment_reference: str) -> ET.Element:
     xml_file = extract_xml_file(tar, xml_file_name)
     if xml_file:
         contents = xml_file.read()
@@ -400,16 +417,15 @@ def aws_clients():
 
 class Ingest:
     @classmethod
-    def from_message_dict(cls, message_dict: dict):
+    def from_message_dict(cls, message_dict: dict) -> "Ingest":
         return Ingest(Message.from_message(message_dict))
 
-    def __init__(self, message: Message):
+    def __init__(self, message: Message) -> None:
         self.message = message
-        self.consignment_reference = self.message.get_consignment_reference()
+        self.consignment_reference: str = self.message.get_consignment_reference()
         print(f"Ingester Start: Consignment reference {self.consignment_reference}")
         print(f"Received Message: {self.message.message}")
         self.local_tar_filename = self.save_tar_file_in_s3()
-        self.consignment_reference = self.message.get_consignment_reference()
         self.uri = DocumentURIString("d-" + str(uuid4()))
         with tarfile.open(self.local_tar_filename, mode="r") as tar:
             self.metadata = extract_metadata(tar, self.consignment_reference)
@@ -434,7 +450,9 @@ class Ingest:
                 VersionType.SUBMISSION,
                 automated=self.metadata_object.force_publish,
                 message=message,
-                payload=_build_version_annotation_payload_from_metadata(self.metadata),
+                payload=dict(
+                    _build_version_annotation_payload_from_metadata(self.metadata),
+                ),  # We cast this to a dict here because VersionAnnotation doesn't yet have a TypedDict as its payload argument.
             )
 
             api_client.get_judgment_xml(self.uri, show_unpublished=True)
@@ -452,7 +470,9 @@ class Ingest:
             VersionType.SUBMISSION,
             automated=self.metadata_object.force_publish,
             message=message,
-            payload=_build_version_annotation_payload_from_metadata(self.metadata),
+            payload=dict(
+                _build_version_annotation_payload_from_metadata(self.metadata),
+            ),  # We cast this to a dict here because VersionAnnotation doesn't yet have a TypedDict as its payload argument.
         )
         api_client.insert_document_xml(self.uri, self.xml, annotation)
         return True
