@@ -3,8 +3,9 @@ import logging
 import os
 import tarfile
 import xml.etree.ElementTree as ET
+from abc import ABC, abstractmethod
 from contextlib import suppress
-from typing import Any, TypedDict
+from typing import IO, Any, Optional, TypedDict
 from urllib.parse import unquote_plus
 from uuid import uuid4
 from xml.sax.saxutils import escape
@@ -27,6 +28,7 @@ from caselawclient.models.utilities.aws import S3PrefixString
 from dotenv import load_dotenv
 from mypy_boto3_s3.client import S3Client
 from mypy_boto3_s3.type_defs import CopySourceTypeDef
+from mypy_boto3_sqs.client import SQSClient
 from notifications_python_client.notifications import NotificationsAPIClient
 
 logger = logging.getLogger("ingester")
@@ -68,8 +70,8 @@ class VersionPayloadDict(TypedDict, total=False):
 
 
 class Metadata:
-    def __init__(self, metadata):
-        self.metadata: TREMetadataDict = metadata
+    def __init__(self, metadata: TREMetadataDict) -> None:
+        self.metadata = metadata
         self.parameters = metadata.get("parameters", {})
 
     @property
@@ -81,9 +83,9 @@ class Metadata:
         return self.parameters.get("INGESTER_OPTIONS", {}).get("auto_publish", False)
 
 
-class Message:
+class Message(ABC):
     @classmethod
-    def from_message(cls, message: dict):
+    def from_message(cls, message: dict) -> "Message":
         if message.get("Records", [{}])[0].get("eventSource") == "aws:s3":
             return S3Message(message["Records"][0])
         elif "parameters" in message:
@@ -91,34 +93,29 @@ class Message:
         else:
             raise InvalidMessageException(f"Did not recognise message type. {message}")
 
-    def __init__(self, message):
+    def __init__(self, message) -> None:
         self.message = message
 
     @property
-    def originator(self):
-        # potential values are:
-        # Original message from TDR: 'TDR'
-        # Reparse message from FCL: 'FCL'
-        # Bulk parse message from FCL: 'FCL S3'
-        raise NotImplementedError("Bare Message objects do not have an originator")
+    @abstractmethod
+    def originator(self) -> str: ...
 
-    def update_consignment_reference(self, new_ref):
-        """In most cases we trust we already have the correct consignment reference"""
+    def update_consignment_reference(self, new_ref: str) -> None:
         return
 
-    def get_consignment_reference(*args, **kwargs):
-        raise NotImplementedError("defer to subclasses")
+    @abstractmethod
+    def get_consignment_reference(self) -> str: ...
+
+    @abstractmethod
+    def save_s3_response(self, sqs_client: SQSClient, s3_client: S3Client) -> str: ...
 
 
 class V2Message(Message):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     @property
     def originator(self) -> str:
         return self.message.get("parameters", {}).get("originator")
 
-    def get_consignment_reference(self):
+    def get_consignment_reference(self) -> str:
         """A strange quirk: the consignment reference we recieve from the V2 message is
         of the form TDR-2000-123, but the consignment reference inside the document is
         of the form TRE-TDR-2000-123. The folder in the .tar.gz file is TDR-2000-123,
@@ -129,7 +126,7 @@ class V2Message(Message):
 
         raise InvalidMessageException("Malformed v2 message, please supply a reference")
 
-    def save_s3_response(self, sqs_client, s3_client) -> str:
+    def save_s3_response(self, sqs_client: SQSClient, s3_client: S3Client) -> str:
         s3_bucket = self.message.get("parameters", {}).get("s3Bucket")
         s3_key = self.message.get("parameters", {}).get("s3Key")
         reference = self.get_consignment_reference()
@@ -144,15 +141,15 @@ class V2Message(Message):
 class S3Message(V2Message):
     """An SNS message generated directly by adding a file to an S3 bucket"""
 
-    def __init__(self, *args, **kwargs):
-        self._consignment = None
+    def __init__(self, *args, **kwargs) -> None:
+        self._consignment: Optional[str] = None
         super().__init__(*args, **kwargs)
 
     @property
-    def originator(self):
+    def originator(self) -> str:
         return "FCL S3"
 
-    def get_consignment_reference(self):
+    def get_consignment_reference(self) -> str:
         """We use the filename as a first draft of the consignment reference,
         but later update it with the value from the tar gz. Note that this
         behaviour is totally inconsistent with the behaviour of the V2 message
@@ -161,10 +158,10 @@ class S3Message(V2Message):
             return self._consignment
         return self.message["s3"]["object"]["key"].split("/")[-1].partition(".")[0]
 
-    def update_consignment_reference(self, new_ref):
+    def update_consignment_reference(self, new_ref: str) -> None:
         self._consignment = new_ref
 
-    def save_s3_response(self, sqs_client, s3_client):
+    def save_s3_response(self, sqs_client: SQSClient, s3_client: S3Client) -> str:
         s3_key = unquote_plus(self.message["s3"]["object"]["key"])
         s3_bucket = self.message["s3"]["bucket"]["name"]
         reference = self.get_consignment_reference()
@@ -177,7 +174,7 @@ class S3Message(V2Message):
 
 
 class ReportableException(Exception):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         rollbar.report_message("Something happened!", "warning", str(self))
         super().__init__(*args, **kwargs)
 
@@ -231,7 +228,7 @@ def all_messages(event) -> list[Message]:
     return [Message.from_message(message) for message in messages_as_decoded_json]
 
 
-def extract_xml_file(tar: tarfile.TarFile, xml_file_name: str):
+def extract_xml_file(tar: tarfile.TarFile, xml_file_name: str) -> Optional[IO[bytes]]:
     xml_file = None
     if xml_file_name:
         for member in tar.getmembers():
@@ -372,10 +369,10 @@ def _build_version_annotation_payload_from_metadata(metadata: TREMetadataDict) -
     return payload
 
 
-def get_best_xml(uri, tar, xml_file_name: str, consignment_reference: str) -> ET.Element:
+def get_best_xml(uri, tar: tarfile.TarFile, xml_file_name: str, consignment_reference: str) -> ET.Element:
     xml_file = extract_xml_file(tar, xml_file_name)
     if xml_file:
-        contents = xml_file.read()
+        contents = xml_file.read().decode("utf-8")  # We assume here that our XML is in UTF-8
         try:
             return parse_xml(contents)
         except ET.ParseError:
@@ -395,7 +392,7 @@ def get_best_xml(uri, tar, xml_file_name: str, consignment_reference: str) -> ET
         return parse_xml(contents)
 
 
-def aws_clients():
+def aws_clients() -> tuple[SQSClient, S3Client]:
     if os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_KEY") and os.getenv("AWS_ENDPOINT_URL"):
         session = boto3.session.Session(
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -430,7 +427,7 @@ class Ingest:
             self.xml = get_best_xml(self.uri, tar, self.xml_file_name, self.consignment_reference)
         print(f"Ingesting document {self.uri}")
 
-    def save_tar_file_in_s3(self):
+    def save_tar_file_in_s3(self) -> str:
         """This should be mocked out for testing -- get the tar file from S3 and
         save locally, returning the filename it was saved at"""
         sqs_client, s3_client = aws_clients()
