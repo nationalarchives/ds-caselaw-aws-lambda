@@ -83,13 +83,6 @@ class Metadata:
 
 class Message:
     @classmethod
-    def from_event(cls, event):
-        decoder = json.decoder.JSONDecoder()
-        message = decoder.decode(event["Records"][0]["Sns"]["Message"])
-        # passes a messagedict to the class
-        return cls.from_message(message)
-
-    @classmethod
     def from_message(cls, message: dict):
         if message.get("Records", [{}])[0].get("eventSource") == "aws:s3":
             return S3Message(message["Records"][0])

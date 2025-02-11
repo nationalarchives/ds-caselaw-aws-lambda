@@ -747,8 +747,8 @@ class TestLambda:
         )
         assert "2010+Reported" in my_raw
 
-        event = {"Records": [{"Sns": {"Message": my_raw}}]}
-        message = lambda_function.Message.from_event(event)
+        decoder = json.decoder.JSONDecoder()
+        message = lambda_function.Message.from_message(decoder.decode(my_raw))
         mock_s3_client = MagicMock()
         message.save_s3_response(None, mock_s3_client)
         mock_s3_client.download_file.assert_called_with(ANY, "2010 Reported/[2010]/1.tar.gz", ANY)
